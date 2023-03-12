@@ -3,5 +3,6 @@ from . import views
 
 
 urlpatterns = [
-    path('', views.test)
+    path('cipher_file/', views.cipher_file),
+    path('decipher_file/', views.decipher_file)
 ]
