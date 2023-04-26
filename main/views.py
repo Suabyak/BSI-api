@@ -94,11 +94,9 @@ def multiply(column, matrix):
 
 @csrf_exempt
 def cipher_file(request):
+    if request.method != "POST":
+        return JsonResponse({"message":"forbidden method"})
     response = dict()
-    print(request)
-    print(dir(request))
-    print(request.read())
-    # read key and file, setup response and temps
     temp = open("key", encoding="utf8")
     temp = temp.read()
     key = list()
@@ -107,13 +105,13 @@ def cipher_file(request):
     key = np.array(key, dtype="int16")
     key = key.reshape((4, 4))
     key = np.swapaxes(key, 0, 1)
-    file = open('test.txt')
-    file = request.read()
+    file = request.body
     response['file'] = ""
     temp = []
     message = []
     for i in file:
-        temp.append(ord(i))
+        # temp.append(ord(i))
+        temp.append(i)
     pointer = 0
     while pointer <= len(temp):
         a = np.array(temp[pointer:pointer+16], dtype="int16")
@@ -148,6 +146,7 @@ def cipher_file(request):
         for row in a[:, :]:
             for i in row:
                 response['file'] += chr(i)
+    print(response["file"])
     file = open("ciphered_plik.txt", "w", encoding="utf8")
     file.write(response["file"])
     file.close()
