@@ -1,6 +1,7 @@
 from django.http import JsonResponse
 from math import ceil
 import numpy as np
+from django.views.decorators.csrf import csrf_exempt
 
 # Create your views here.
 column_matrix = np.array([[2,3,1,1],
@@ -91,8 +92,12 @@ def multiply(column, matrix):
                 new_column[row] = val
     return new_column
 
+@csrf_exempt
 def cipher_file(request):
     response = dict()
+    print(request)
+    print(dir(request))
+    print(request.read())
     # read key and file, setup response and temps
     temp = open("key", encoding="utf8")
     temp = temp.read()
@@ -103,7 +108,7 @@ def cipher_file(request):
     key = key.reshape((4, 4))
     key = np.swapaxes(key, 0, 1)
     file = open('test.txt')
-    file, encoding = file.read(), file.encoding
+    file = request.read()
     response['file'] = ""
     temp = []
     message = []
