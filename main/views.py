@@ -45,127 +45,195 @@ reverse_s_box = np.array([[0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf,
                           [0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61],
                           [0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d], ], dtype = "int16")
 
-def subsitute_char(char):
-    row = ceil(char / 16) - 1
-    column = char % 16 - 1
-    return s_box[row, column]
 
-def substitute_block(block):
+def cap(number):
+    if number < 0 or number >= 256:
+        number = number % 256
+    if number >= 128:
+        number ^= 0b1000111
+    return number
+
+
+def substitute_char(char, box=s_box):
+    column = char % 16
+    row = int((char-column) / 16)
+    return box[row, column]
+
+def substitute_message(message, box=s_box):
+    for col in message:
+        for i in range(len(col)):
+            col[i] = substitute_char(col[i], box)
+    return message
+
+def generate_rcon():
+    rcon = [1]
+    for i in range(12):
+        rcon.append(cap(rcon[i]*2))
+    return rcon
+
+rcon = [1, 2, 4, 8, 16, 32, 64, 128, 27, 54, 108, 216, 171]
+
+
+def create_key():
+    file = open("key", encoding="utf8").read()
+    key = list()
+    key_row = list()
+    for i in range(int(len(file)/8)):
+        key_row.append(int(file[8*i:8*i+8],2))
+        if len(key_row) == 4:
+            key.append(key_row)
+            key_row = list()
+    
+    for round in range(13):
+        
+        for i in range(4):
+            col = key[round*4+i+7]
+            if i == 0:
+                
+                col = [col[1], col[2], col[3], col[0]]
+                
+                for j in range(4):
+                    col[j] = substitute_char(col[j])
+                    col[j] ^= key[round*4+i][j]
+                
+                col[0] = col[0] ^ rcon[round]
+            else:
+                col[j] ^= key[round*4+i][j]
+            key.append(col)
+    return np.array(key, dtype="uint8")
+
+def text_to_table(text):
+    table = list()
+    l = len(text)%16
+    if l > 0:
+        text = text + " "*(16-l)
+    for i in range(int(len(text)/4)):
+        col = list()
+        for j in range(4):
+            col.append(ord(text[i*4+j]))
+        table.append(col)
+    return np.array(table, dtype="uint8")
+
+
+def xor_block(block, block2):
     for row in range(block.shape[0]):
         for column in range(block.shape[1]):
-            block[row, column] = subsitute_char(block[row, column])
+            block[row, column] = block[row, column] ^ block2[row, column]
     return block
 
+def add_key_to_message(message, key, round):
+    key = key[4*round:4*round+4]
+    for i in range(int(len(message)/4)):
+        message[i*4:i*4+4] = xor_block(message[i*4:i*4+4], key)
+    return message
+    
+def shift_rows(message, inverse=False):
+    multiplier = 1
+    if inverse:
+        multiplier = -1
+    for i in range(int(len(message)/4)):
+        block = message[i*4:i*4+4]
+        for j in range(4):
+            block[:,j] = np.roll(block[:,j], -j*multiplier)
+    return message
 
-def reverse_substitute_char(char):
-    row = ceil(char / 16) - 1
-    column = char % 16 - 1
-    return reverse_s_box[row, column]
+
+def modulo2_multiply(a, b):
+    p = 0
+    for i in range(8):
+        if b & 1:
+            p ^= a
+        hi_bit_set = a & 0x80
+        a <<= 1
+        if hi_bit_set:
+            a ^= 0x1b
+        b >>= 1
+    return p % 256
 
 
-def reverse_substitute_block(block):
-    for row in range(block.shape[0]):
-        for column in range(block.shape[1]):
-            block[row, column] = reverse_substitute_char(block[row, column])
-    return block
-
-
-def xor_block(block, key):
-    for row in range(block.shape[0]):
-        for column in range(block.shape[1]):
-            block[row, column] = block[row, column] ^ key[row, column]
-    return block
-
-def multiply(column, matrix):
-    new_column = [0, 0, 0, 0]
-    for row in range(len(new_column)):
-        for col in range(len(new_column)): # len(283) in bin is 11 -> 0b = 2, bin value = 9
-            val = column[row] * matrix[row][col]
-            while len(bin(val))-2 > 8:
-                len_difference = len(bin(val)) - 11
-                divider = int(bin(283) + bin(val)[len(bin(val))-len_difference:], 2)
-                val ^= divider
-            
-            if new_column[row] != 0:    
-                new_column[row] ^= val
-            else: 
-                new_column[row] = val
+def multiply_column_by_matrix(column, matrix):
+    new_column = np.zeros((4), dtype="uint8")
+    for row in range(4):
+        for col in range(4):
+            new_column[row] ^= modulo2_multiply(column[col], matrix[row, col])
     return new_column
+
+
+def multiply_message_by_matrix(message, matrix):
+    for i in range(int(len(message)/4)):
+        block = message[i*4:i*4+4]
+        for j in range(4):
+            block[j] = multiply_column_by_matrix(block[j], matrix)
+    return message
+
 
 @csrf_exempt
 def cipher_file(request):
     if request.method != "POST":
-        return JsonResponse({"message":"forbidden method"})
-    response = dict()
-    temp = open("key", encoding="utf8")
-    temp = temp.read()
-    key = list()
-    for i in temp:
-        key.append(ord(i))
-    key = np.array(key, dtype="int16")
-    key = key.reshape((4, 4))
-    key = np.swapaxes(key, 0, 1)
-    file = request.body
-    response['file'] = ""
-    temp = []
-    message = []
-    for i in file:
-        # temp.append(ord(i))
-        temp.append(i)
-    pointer = 0
-    while pointer <= len(temp):
-        a = np.array(temp[pointer:pointer+16], dtype="int16")
-        # fill with 0 if not 4x4
-        if a.shape[0] != 16:
-            empty = np.full((16), 32, dtype="int16")
-            empty[:a.shape[0]] = a[:]
-            a = empty
-        a = a.reshape((4, 4))
-        a = np.swapaxes(a, 0, 1)
-        pointer += 16
-        # add block to message
-        a = xor_block(a, key)       
-        message.append(a)
+        return JsonResponse({"message": "forbidden method"})
 
-    round = 0
-    while round < 14:
-        # select blocks
-        key = substitute_block(key)
-        for a in message:
-            # roll  
-            a = substitute_block(a)
-            for i in range(a.shape[0]):
-                a[i, :] = np.roll(a[i, :], -i)
-            # multiply columns
-            if round < 13:
-                for i in range(a.shape[1]):
-                    a[:, i] = multiply(a[:, i], column_matrix)
-            a = xor_block(a, key)
-        round += 1
-    for a in message:
-        for row in a[:, :]:
-            for i in row:
-                response['file'] += chr(i)
-    print(response["file"])
-    file = open("ciphered_plik.txt", "w", encoding="utf8")
-    file.write(response["file"])
-    file.close()
+    response = dict()
+    response["file"] = str()
+    key = create_key()
+
+    print(request.POST)
+
+    text = request.body.decode("ascii")
+    
+    message = text_to_table(text)
+    
+    message = add_key_to_message(message, key, 0)
+    for round in range(14):
+        message = substitute_message(message)
+        message = shift_rows(message)
+        if round < 13:
+            message = multiply_message_by_matrix(message, column_matrix)    
+        message = add_key_to_message(message, key, round)
+    for i in range(len(message)):
+        for j in range(len(message[i])):
+            char_2 = message[i, j]%16
+            char_1 = int((message[i, j]-char_2)/16)
+            response["file"] += hex(char_1)[2:] + hex(char_2)[2:]
+    
     return JsonResponse(response)
 
 
+@csrf_exempt
 def decipher_file(request):
+    if request.method != "POST":
+        return JsonResponse({"message": "forbidden method"})
+
     response = dict()
-    # read key and file, setup response and temps
-    temp = open("key", encoding="utf8")
-    temp = temp.read()
-    key = list()
-    for i in temp:
-        key.append(ord(i))
-    key = np.array(key, dtype="int16")
-    key = key.reshape((4, 4))
-    key = np.swapaxes(key, 0, 1)
-    file = open('ciphered_plik.txt')
-    file, encoding = file.read(), file.encoding
-    response['file'] = ""
+    response["file"] = str()
+
+    key = create_key()
+
+    text = request.body.decode("utf8")
+    new_text = list()
+    col = list()
+    counter = 0
+    for i in range(int(len(text)/2)):
+        char_2 = int(text[i*2+1],16)
+        char_1 = int(text[i*2],16)
+        col.append(char_2+char_1*16)
+        counter += 1
+        if counter == 4:
+            new_text.append(col)
+            col = list()
+            counter = 0
+    message = np.array(new_text, dtype="uint8")
     
+    for round in range(14):
+        round = 13-round
+        message = add_key_to_message(message, key, round)
+        if round < 13:
+            message = multiply_message_by_matrix(message, reverse_column_matrix)
+        message = shift_rows(message, True)
+        message = substitute_message(message, reverse_s_box)
+    message = add_key_to_message(message, key, 0)
+
+    for i in range(len(message)):
+        for j in range(len(message[i])):
+            response["file"] += chr(message[i, j])
+    response["file"] = response["file"].strip()
     return JsonResponse(response)
